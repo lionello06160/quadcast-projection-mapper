@@ -103,7 +103,7 @@ kbd { padding: 2px 4px; border: 1px solid #39413f; border-bottom-width: 2px; col
 .wide-add { width: 100%; height: 34px; margin-bottom: 10px; border-style: solid; }
 .projectors-section { padding-bottom: 11px; }
 .projectors-section .wide-add { height: 30px; margin-bottom: 6px; }
-.projector-list { min-height: 0; overflow-y: auto; }
+.projector-list { min-height: 0; padding-right: 9px; overflow-y: auto; scrollbar-gutter: stable; }
 .projector-item { position: relative; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 26px; border: 1px solid transparent; border-bottom-color: #222827; background: #101313; }
 .projector-item.selected { border-color: #4f625e; background: #181d1c; }
 .projector-item > b { position: absolute; right: 7px; top: 4px; color: #3d4845; font: 500 7px 'IBM Plex Mono'; pointer-events: none; }
