@@ -25,7 +25,7 @@ import {
   VolumeX,
 } from 'lucide-react'
 import { CalibrationCanvas } from './CalibrationCanvas'
-import { insertPointOnLongestEdge, isValidQuad, isValidPolygon } from './geometry'
+import { insertPointOnEdge, isValidQuad, isValidPolygon, longestEdgeIndex, polygonBoundingBoxUvs } from './geometry'
 import { makeSurface, loadProject, normalizeState, persistProject, sortSurfaces, TEST_SOURCE } from './projectState'
 import { SourceManager } from './sourceManager'
 import type { ProjectionMessage, ProjectState, SourceDescriptor, Surface } from './types'
@@ -221,6 +221,7 @@ export function App() {
       name: `${surface.name} COPY`,
       corners: surface.corners.map((point) => ({ x: point.x + shiftX, y: point.y + shiftY })) as Surface['corners'],
       mask: surface.mask?.map((point) => ({ x: point.x + shiftX, y: point.y + shiftY })) ?? null,
+      maskUvs: surface.maskUvs?.map((point) => ({ ...point })) ?? null,
       zIndex: state.surfaces.length,
     }
     updateState((current) => ({ ...current, surfaces: [...current.surfaces, copy], selectedSurfaceId: copy.id }))
@@ -305,23 +306,32 @@ export function App() {
 
   const enableMask = () => {
     if (!selectedSurface) return
-    updateSurface(selectedSurface.id, { mask: selectedSurface.corners.map((point) => ({ ...point })) })
+    updateSurface(selectedSurface.id, {
+      mask: selectedSurface.corners.map((point) => ({ ...point })),
+      maskUvs: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }],
+    })
     setEditMode('mask')
     setSelectedMaskVertex(0)
   }
 
   const addMaskPoint = () => {
     if (!selectedSurface?.mask || selectedSurface.mask.length >= 32) return
-    const mask = insertPointOnLongestEdge(selectedSurface.mask)
-    updateSurface(selectedSurface.id, { mask })
-    setSelectedMaskVertex(Math.min(mask.length - 1, selectedMaskVertex + 1))
+    const edgeIndex = longestEdgeIndex(selectedSurface.mask)
+    const mask = insertPointOnEdge(selectedSurface.mask, edgeIndex)
+    const currentUvs = selectedSurface.maskUvs?.length === selectedSurface.mask.length
+      ? selectedSurface.maskUvs
+      : polygonBoundingBoxUvs(selectedSurface.mask)
+    const maskUvs = insertPointOnEdge(currentUvs, edgeIndex)
+    updateSurface(selectedSurface.id, { mask, maskUvs })
+    setSelectedMaskVertex(edgeIndex + 1)
   }
 
   const removeMaskPoint = () => {
     if (!selectedSurface?.mask || selectedSurface.mask.length <= 3) return
     const mask = selectedSurface.mask.filter((_, index) => index !== selectedMaskVertex)
     if (!isValidPolygon(mask)) return
-    updateSurface(selectedSurface.id, { mask })
+    const maskUvs = selectedSurface.maskUvs?.filter((_, index) => index !== selectedMaskVertex) ?? null
+    updateSurface(selectedSurface.id, { mask, maskUvs })
     setSelectedMaskVertex(Math.max(0, Math.min(selectedMaskVertex, mask.length - 1)))
   }
 
@@ -456,7 +466,7 @@ export function App() {
                   <div className="mask-controls">
                     <button onClick={addMaskPoint} disabled={!selectedSurface.mask || selectedSurface.mask.length >= 32}><Plus size={14} /> 增加節點</button>
                     <button onClick={removeMaskPoint} disabled={!selectedSurface.mask || selectedSurface.mask.length <= 3}><Minus size={14} /> 刪除 P{selectedMaskVertex + 1}</button>
-                    <button className="reset-mask" onClick={() => { updateSurface(selectedSurface.id, { mask: null }); setEditMode('warp') }}>清除遮罩</button>
+                    <button className="reset-mask" onClick={() => { updateSurface(selectedSurface.id, { mask: null, maskUvs: null }); setEditMode('warp') }}>清除遮罩</button>
                   </div>
                 ) : null}
               </section>

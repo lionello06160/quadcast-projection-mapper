@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampTranslation, insertPointOnLongestEdge, invertMatrix3, isValidPolygon, isValidQuad, polygonArea, quadHomography, transformPoint, translatePoints } from './geometry'
+import { clampTranslation, insertPointOnLongestEdge, invertMatrix3, isValidPolygon, isValidQuad, polygonArea, quadHomography, transformPoint, translatePoints, triangulatePolygon } from './geometry'
 import type { Surface } from './types'
 
 const rectangle: Surface['corners'] = [
@@ -31,6 +31,14 @@ describe('arbitrary polygon masks', () => {
     const result = insertPointOnLongestEdge(rectangle)
     expect(result).toHaveLength(5)
     expect(isValidPolygon(result)).toBe(true)
+    expect(triangulatePolygon(result)).toHaveLength(9)
+  })
+
+  it('triangulates convex and concave outlines without missing a region', () => {
+    expect(triangulatePolygon(rectangle)).toHaveLength(6)
+    expect(triangulatePolygon([
+      { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.5, y: 0.4 }, { x: 1, y: 1 }, { x: 0, y: 1 },
+    ])).toHaveLength(9)
   })
 })
 

@@ -1,4 +1,5 @@
 import type { ProjectState, SourceDescriptor, Surface } from './types'
+import { polygonBoundingBoxUvs } from './geometry'
 
 export const STORAGE_KEY = 'quadcast:project:v1'
 
@@ -22,6 +23,7 @@ export function makeSurface(index: number, sourceId: string | null = TEST_SOURCE
       { x: 0.16 + offset, y: 0.82 - offset },
     ],
     mask: null,
+    maskUvs: null,
     opacity: 1,
     visible: true,
     zIndex: index,
@@ -60,10 +62,13 @@ export function normalizeState(candidate: unknown): ProjectState {
   return {
     version: 1,
     outputBackground: typeof value.outputBackground === 'string' ? value.outputBackground : '#000000',
-    surfaces: value.surfaces.map((surface) => ({
-      ...surface,
-      mask: Array.isArray(surface.mask) ? surface.mask : null,
-    })),
+    surfaces: value.surfaces.map((surface) => {
+      const mask = Array.isArray(surface.mask) ? surface.mask : null
+      const savedUvs = 'maskUvs' in surface && Array.isArray(surface.maskUvs) ? surface.maskUvs : null
+      let maskUvs = mask && savedUvs?.length === mask.length ? savedUvs : null
+      if (mask && !maskUvs) maskUvs = polygonBoundingBoxUvs(mask)
+      return { ...surface, mask, maskUvs }
+    }),
     sources,
     selectedSurfaceId: value.surfaces.some((surface) => surface.id === value.selectedSurfaceId)
       ? value.selectedSurfaceId ?? null

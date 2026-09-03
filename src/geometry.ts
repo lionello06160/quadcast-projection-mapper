@@ -25,6 +25,17 @@ export function translatePoints(points: readonly Point[], delta: Point): Point[]
   return points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y }))
 }
 
+export function polygonBoundingBoxUvs(points: readonly Point[]): Point[] {
+  if (!points.length) return []
+  const minX = Math.min(...points.map((point) => point.x))
+  const maxX = Math.max(...points.map((point) => point.x))
+  const minY = Math.min(...points.map((point) => point.y))
+  const maxY = Math.max(...points.map((point) => point.y))
+  const width = Math.max(maxX - minX, 0.000001)
+  const height = Math.max(maxY - minY, 0.000001)
+  return points.map((point) => ({ x: (point.x - minX) / width, y: (point.y - minY) / height }))
+}
+
 function cross(a: Point, b: Point, c: Point): number {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
 }
@@ -74,6 +85,10 @@ export function isValidPolygon(points: readonly Point[]): boolean {
 
 export function insertPointOnLongestEdge(points: readonly Point[]): Point[] {
   if (points.length >= 32) return [...points]
+  return insertPointOnEdge(points, longestEdgeIndex(points))
+}
+
+export function longestEdgeIndex(points: readonly Point[]): number {
   let longestIndex = 0
   let longestLength = -1
   for (let index = 0; index < points.length; index += 1) {
@@ -84,11 +99,67 @@ export function insertPointOnLongestEdge(points: readonly Point[]): Point[] {
       longestIndex = index
     }
   }
-  const next = points[(longestIndex + 1) % points.length]
-  const midpoint = { x: (points[longestIndex].x + next.x) / 2, y: (points[longestIndex].y + next.y) / 2 }
+  return longestIndex
+}
+
+export function insertPointOnEdge(points: readonly Point[], edgeIndex: number): Point[] {
+  if (points.length >= 32 || !points.length) return [...points]
+  const normalizedIndex = ((edgeIndex % points.length) + points.length) % points.length
+  const next = points[(normalizedIndex + 1) % points.length]
+  const midpoint = { x: (points[normalizedIndex].x + next.x) / 2, y: (points[normalizedIndex].y + next.y) / 2 }
   const result = [...points]
-  result.splice(longestIndex + 1, 0, midpoint)
+  result.splice(normalizedIndex + 1, 0, midpoint)
   return result
+}
+
+function signedPolygonArea(points: readonly Point[]): number {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const next = points[(index + 1) % points.length]
+    area += points[index].x * next.y - next.x * points[index].y
+  }
+  return area / 2
+}
+
+function pointInTriangle(point: Point, a: Point, b: Point, c: Point): boolean {
+  const first = cross(a, b, point)
+  const second = cross(b, c, point)
+  const third = cross(c, a, point)
+  const hasNegative = first < -EPSILON || second < -EPSILON || third < -EPSILON
+  const hasPositive = first > EPSILON || second > EPSILON || third > EPSILON
+  return !(hasNegative && hasPositive)
+}
+
+/** Ear-clipping triangulation for simple clockwise or counter-clockwise polygons. */
+export function triangulatePolygon(points: readonly Point[]): number[] {
+  if (!isValidPolygon(points)) return []
+  const orientationSign = signedPolygonArea(points) > 0 ? 1 : -1
+  const remaining = points.map((_, index) => index)
+  const triangles: number[] = []
+  let guard = points.length * points.length
+
+  while (remaining.length > 3 && guard > 0) {
+    let clipped = false
+    for (let index = 0; index < remaining.length; index += 1) {
+      const previous = remaining[(index - 1 + remaining.length) % remaining.length]
+      const current = remaining[index]
+      const next = remaining[(index + 1) % remaining.length]
+      if (cross(points[previous], points[current], points[next]) * orientationSign <= EPSILON) continue
+      const containsPoint = remaining.some((candidate) =>
+        candidate !== previous && candidate !== current && candidate !== next &&
+        pointInTriangle(points[candidate], points[previous], points[current], points[next]),
+      )
+      if (containsPoint) continue
+      triangles.push(previous, current, next)
+      remaining.splice(index, 1)
+      clipped = true
+      break
+    }
+    if (!clipped) return []
+    guard -= 1
+  }
+  if (remaining.length === 3) triangles.push(...remaining)
+  return triangles
 }
 
 /** Matrix mapping unit-square UV coordinates to normalized output coordinates. */

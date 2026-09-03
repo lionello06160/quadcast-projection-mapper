@@ -28,4 +28,14 @@ describe('project persistence', () => {
   it('recovers safely from unsupported data', () => {
     expect(normalizeState({ version: 99 })).toMatchObject({ version: 1, blackout: false })
   })
+
+  it('adds polygon texture coordinates to older saved projects', () => {
+    const project = createDefaultState()
+    project.surfaces[0].mask = project.surfaces[0].corners.map((point) => ({ ...point }))
+    Reflect.deleteProperty(project.surfaces[0], 'maskUvs')
+    const loaded = normalizeState(project)
+    expect(loaded.surfaces[0].maskUvs).toEqual([
+      { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 },
+    ])
+  })
 })

@@ -26,6 +26,7 @@ export interface Surface {
   sourceId: string | null
   corners: [Point, Point, Point, Point]
   mask: Point[] | null
+  maskUvs: Point[] | null
   opacity: number
   visible: boolean
   zIndex: number
