@@ -1,0 +1,62 @@
+import { describe, expect, it } from 'vitest'
+import { insertPointOnLongestEdge, invertMatrix3, isValidPolygon, isValidQuad, polygonArea, quadHomography, transformPoint } from './geometry'
+import type { Surface } from './types'
+
+const rectangle: Surface['corners'] = [
+  { x: 0.1, y: 0.2 },
+  { x: 0.9, y: 0.2 },
+  { x: 0.9, y: 0.8 },
+  { x: 0.1, y: 0.8 },
+]
+
+describe('quadrilateral validation', () => {
+  it('accepts a convex rectangle', () => {
+    expect(isValidQuad(rectangle)).toBe(true)
+    expect(polygonArea(rectangle)).toBeCloseTo(0.48)
+  })
+
+  it('rejects crossed and degenerate corners', () => {
+    expect(isValidQuad([rectangle[0], rectangle[2], rectangle[1], rectangle[3]])).toBe(false)
+    expect(isValidQuad([{ x: 0, y: 0 }, { x: 0.1, y: 0 }, { x: 0.2, y: 0 }, { x: 0.3, y: 0 }])).toBe(false)
+  })
+})
+
+describe('arbitrary polygon masks', () => {
+  it('accepts concave outlines and rejects self intersections', () => {
+    expect(isValidPolygon([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.5, y: 0.4 }, { x: 1, y: 1 }, { x: 0, y: 1 }])).toBe(true)
+    expect(isValidPolygon([{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }])).toBe(false)
+  })
+
+  it('adds a midpoint without changing the outline', () => {
+    const result = insertPointOnLongestEdge(rectangle)
+    expect(result).toHaveLength(5)
+    expect(isValidPolygon(result)).toBe(true)
+  })
+})
+
+describe('homography', () => {
+  it('maps every unit-square corner to the requested output corner', () => {
+    const trapezoid: Surface['corners'] = [
+      { x: 0.18, y: 0.12 },
+      { x: 0.82, y: 0.22 },
+      { x: 0.94, y: 0.86 },
+      { x: 0.07, y: 0.73 },
+    ]
+    const matrix = quadHomography(trapezoid)
+    const inputs = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]
+    inputs.forEach((input, index) => {
+      const result = transformPoint(matrix, input)
+      expect(result.x).toBeCloseTo(trapezoid[index].x, 6)
+      expect(result.y).toBeCloseTo(trapezoid[index].y, 6)
+    })
+  })
+
+  it('inverts the mapping', () => {
+    const matrix = quadHomography(rectangle)
+    const inverse = invertMatrix3(matrix)
+    const mapped = transformPoint(matrix, { x: 0.37, y: 0.62 })
+    const restored = transformPoint(inverse, mapped)
+    expect(restored.x).toBeCloseTo(0.37, 6)
+    expect(restored.y).toBeCloseTo(0.62, 6)
+  })
+})
