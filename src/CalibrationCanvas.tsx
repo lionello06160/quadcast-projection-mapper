@@ -1,11 +1,15 @@
 import { useMemo, useState } from 'react'
-import { clampPoint, isValidPolygon, isValidQuad } from './geometry'
+import { clampPoint, clampTranslation, isValidPolygon, isValidQuad, translatePoints } from './geometry'
 import type { Point, ProjectState, Surface } from './types'
 import { useProjectionRenderer } from './useProjectionRenderer'
 
 const VIEW_WIDTH = 1000
 const VIEW_HEIGHT = 562.5
 const cornerLabels = ['TL', 'TR', 'BR', 'BL']
+
+type DragState =
+  | { surfaceId: string; pointIndex: number; kind: 'warp' | 'mask' }
+  | { surfaceId: string; kind: 'surface'; origin: Point; corners: Surface['corners']; mask: Point[] | null }
 
 interface CalibrationCanvasProps {
   state: ProjectState
@@ -20,7 +24,7 @@ interface CalibrationCanvasProps {
 
 export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChange, editMode, selectedMaskVertex, onMaskVertexSelect, onMaskChange }: CalibrationCanvasProps) {
   const { canvasRef, error } = useProjectionRenderer(state, getDrawable)
-  const [dragging, setDragging] = useState<{ surfaceId: string; pointIndex: number; kind: 'warp' | 'mask' } | null>(null)
+  const [dragging, setDragging] = useState<DragState | null>(null)
   const orderedSurfaces = useMemo(
     () => [...state.surfaces].sort((left, right) => left.zIndex - right.zIndex),
     [state.surfaces],
@@ -52,6 +56,30 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
     if (isValidPolygon(mask)) onMaskChange(surface.id, mask)
   }
 
+  const normalizedPointer = (event: React.PointerEvent<SVGElement>): Point | null => {
+    const svg = event.currentTarget.ownerSVGElement
+    if (!svg) return null
+    const bounds = svg.getBoundingClientRect()
+    return {
+      x: (event.clientX - bounds.left) / bounds.width,
+      y: (event.clientY - bounds.top) / bounds.height,
+    }
+  }
+
+  const moveSurfaceFromPointer = (event: React.PointerEvent<SVGPolygonElement>) => {
+    if (!dragging || dragging.kind !== 'surface') return
+    const point = normalizedPointer(event)
+    if (!point) return
+    const startPoints = dragging.mask ? [...dragging.corners, ...dragging.mask] : dragging.corners
+    const delta = clampTranslation(startPoints, {
+      x: point.x - dragging.origin.x,
+      y: point.y - dragging.origin.y,
+    })
+    const corners = translatePoints(dragging.corners, delta) as Surface['corners']
+    onCornersChange(dragging.surfaceId, corners)
+    if (dragging.mask) onMaskChange(dragging.surfaceId, translatePoints(dragging.mask, delta))
+  }
+
   return (
     <div className="calibration-stage" data-testid="calibration-stage">
       <canvas ref={canvasRef} className="render-canvas" aria-label="投影內容預覽" />
@@ -69,8 +97,26 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
             <g key={surface.id} className={selected ? 'surface-shape selected' : 'surface-shape'}>
               <polygon
                 points={points}
-                onPointerDown={() => onSelect(surface.id)}
-                aria-label={`選取 ${surface.name}`}
+                onPointerDown={(event) => {
+                  const origin = normalizedPointer(event)
+                  if (!origin) return
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                  onSelect(surface.id)
+                  setDragging({
+                    surfaceId: surface.id,
+                    kind: 'surface',
+                    origin,
+                    corners: surface.corners.map((corner) => ({ ...corner })) as Surface['corners'],
+                    mask: surface.mask?.map((point) => ({ ...point })) ?? null,
+                  })
+                }}
+                onPointerMove={moveSurfaceFromPointer}
+                onPointerUp={(event) => {
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+                  setDragging(null)
+                }}
+                onPointerCancel={() => setDragging(null)}
+                aria-label={`拖曳 ${surface.name}`}
               />
               {surface.mask ? (
                 <polygon
@@ -86,12 +132,13 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
                         cy={corner.y * VIEW_HEIGHT}
                         r="11"
                         onPointerDown={(event) => {
+                          event.stopPropagation()
                           event.currentTarget.setPointerCapture(event.pointerId)
                           setDragging({ surfaceId: surface.id, pointIndex: cornerIndex, kind: 'warp' })
                           updateFromPointer(event, surface, cornerIndex)
                         }}
                         onPointerMove={(event) => {
-                          if (dragging?.surfaceId === surface.id && dragging.pointIndex === cornerIndex && dragging.kind === 'warp') {
+                          if (dragging?.kind === 'warp' && dragging.surfaceId === surface.id && dragging.pointIndex === cornerIndex) {
                             updateFromPointer(event, surface, cornerIndex)
                           }
                         }}
@@ -114,13 +161,14 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
                         cy={point.y * VIEW_HEIGHT}
                         r="9"
                         onPointerDown={(event) => {
+                          event.stopPropagation()
                           event.currentTarget.setPointerCapture(event.pointerId)
                           onMaskVertexSelect(pointIndex)
                           setDragging({ surfaceId: surface.id, pointIndex, kind: 'mask' })
                           updateMaskFromPointer(event, surface, pointIndex)
                         }}
                         onPointerMove={(event) => {
-                          if (dragging?.surfaceId === surface.id && dragging.pointIndex === pointIndex && dragging.kind === 'mask') {
+                          if (dragging?.kind === 'mask' && dragging.surfaceId === surface.id && dragging.pointIndex === pointIndex) {
                             updateMaskFromPointer(event, surface, pointIndex)
                           }
                         }}

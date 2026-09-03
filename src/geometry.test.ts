@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { insertPointOnLongestEdge, invertMatrix3, isValidPolygon, isValidQuad, polygonArea, quadHomography, transformPoint } from './geometry'
+import { clampTranslation, insertPointOnLongestEdge, invertMatrix3, isValidPolygon, isValidQuad, polygonArea, quadHomography, transformPoint, translatePoints } from './geometry'
 import type { Surface } from './types'
 
 const rectangle: Surface['corners'] = [
@@ -31,6 +31,25 @@ describe('arbitrary polygon masks', () => {
     const result = insertPointOnLongestEdge(rectangle)
     expect(result).toHaveLength(5)
     expect(isValidPolygon(result)).toBe(true)
+  })
+})
+
+describe('surface translation', () => {
+  it('moves every point by the same amount', () => {
+    const translated = translatePoints(rectangle, { x: 0.05, y: -0.1 })
+    translated.forEach((point, index) => {
+      expect(point.x - rectangle[index].x).toBeCloseTo(0.05)
+      expect(point.y - rectangle[index].y).toBeCloseTo(-0.1)
+    })
+  })
+
+  it('clamps a whole-surface move to the output bounds', () => {
+    const bottomRight = clampTranslation(rectangle, { x: 0.5, y: 0.5 })
+    expect(bottomRight.x).toBeCloseTo(0.1)
+    expect(bottomRight.y).toBeCloseTo(0.2)
+    const topLeft = clampTranslation(rectangle, { x: -0.5, y: -0.5 })
+    expect(topLeft.x).toBeCloseTo(-0.1)
+    expect(topLeft.y).toBeCloseTo(-0.2)
   })
 })
 

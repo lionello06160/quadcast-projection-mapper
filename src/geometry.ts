@@ -9,6 +9,22 @@ export function clampPoint(point: Point): Point {
   }
 }
 
+export function clampTranslation(points: readonly Point[], delta: Point): Point {
+  if (!points.length) return { x: 0, y: 0 }
+  const minX = Math.min(...points.map((point) => point.x))
+  const maxX = Math.max(...points.map((point) => point.x))
+  const minY = Math.min(...points.map((point) => point.y))
+  const maxY = Math.max(...points.map((point) => point.y))
+  return {
+    x: Math.max(-minX, Math.min(delta.x, 1 - maxX)),
+    y: Math.max(-minY, Math.min(delta.y, 1 - maxY)),
+  }
+}
+
+export function translatePoints(points: readonly Point[], delta: Point): Point[] {
+  return points.map((point) => ({ x: point.x + delta.x, y: point.y + delta.y }))
+}
+
 function cross(a: Point, b: Point, c: Point): number {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
 }

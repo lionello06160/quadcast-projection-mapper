@@ -339,8 +339,13 @@ export function App() {
           <button className={state.showGrid ? 'tool-button active' : 'tool-button'} onClick={() => updateState((current) => ({ ...current, showGrid: !current.showGrid }))}>
             <Grid3X3 size={16} /> 格線 <kbd>G</kbd>
           </button>
-          <button className={state.blackout ? 'tool-button danger active' : 'tool-button danger'} onClick={() => updateState((current) => ({ ...current, blackout: !current.blackout }))}>
-            <CircleStop size={16} /> 全黑 <kbd>B</kbd>
+          <button
+            className={state.blackout ? 'tool-button blackout-button active' : 'tool-button blackout-button'}
+            aria-pressed={state.blackout}
+            aria-label={state.blackout ? '恢復投影畫面' : '一鍵黑畫面'}
+            onClick={() => updateState((current) => ({ ...current, blackout: !current.blackout }))}
+          >
+            <CircleStop size={16} /> {state.blackout ? '恢復畫面' : '一鍵黑畫面'} <kbd>B</kbd>
           </button>
           <button className="primary-button" onClick={openOutput}>
             <MonitorUp size={17} /> {outputOpen ? '查看輸出視窗' : '開啟投影輸出'}
@@ -368,11 +373,13 @@ export function App() {
                     <strong title={source.name}>{source.name}</strong>
                     <small className={`status-${source.status}`}>{iconButtonLabel(source)}</small>
                   </button>
-                  {source.status !== 'ready' && source.type !== 'test-pattern' ? (
-                    <button className="icon-button" aria-label={`重新連接 ${source.name}`} onClick={() => reconnect(source)}><ScreenShare size={15} /></button>
-                  ) : null}
                   {source.type !== 'test-pattern' ? (
-                    <button className="icon-button dim" aria-label={`移除 ${source.name}`} onClick={() => removeSource(source.id)}><Trash2 size={14} /></button>
+                    <div className="source-actions">
+                      {source.status !== 'ready' ? (
+                        <button className="icon-button" title="重新連接來源" aria-label={`重新連接 ${source.name}`} onClick={() => reconnect(source)}><ScreenShare size={15} /></button>
+                      ) : null}
+                      <button className="icon-button remove-source" title="刪除來源" aria-label={`刪除來源 ${source.name}`} onClick={() => removeSource(source.id)}><Trash2 size={14} /></button>
+                    </div>
                   ) : null}
                 </article>
               ))}
@@ -404,7 +411,7 @@ export function App() {
         <section className="center-stage">
           <div className="stage-header">
             <div><span className="live-dot" /> OUTPUT PREVIEW</div>
-            <span>{editMode === 'warp' ? 'DRAG CORNERS TO CALIBRATE' : 'EDIT POLYGON MASK'}</span>
+            <span>{editMode === 'warp' ? 'DRAG SURFACE OR CORNERS' : 'DRAG SURFACE OR EDIT MASK'}</span>
           </div>
           <div className="stage-wrap">
             <CalibrationCanvas
