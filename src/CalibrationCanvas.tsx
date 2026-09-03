@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { clampPoint, clampTranslation, isValidPolygon, isValidQuad, translatePoints } from './geometry'
+import { clampPoint, clampTranslation, isValidQuad, translatePoints } from './geometry'
 import type { Point, ProjectState, Surface } from './types'
 import { useProjectionRenderer } from './useProjectionRenderer'
 
@@ -8,21 +8,17 @@ const VIEW_HEIGHT = 562.5
 const cornerLabels = ['TL', 'TR', 'BR', 'BL']
 
 type DragState =
-  | { surfaceId: string; pointIndex: number; kind: 'warp' | 'mask' }
-  | { surfaceId: string; kind: 'surface'; origin: Point; corners: Surface['corners']; mask: Point[] | null }
+  | { surfaceId: string; pointIndex: number; kind: 'warp' }
+  | { surfaceId: string; kind: 'surface'; origin: Point; corners: Surface['corners'] }
 
 interface CalibrationCanvasProps {
   state: ProjectState
   getDrawable: (id: string) => TexImageSource | null
   onSelect: (id: string) => void
   onCornersChange: (id: string, corners: Surface['corners']) => void
-  editMode: 'warp' | 'mask'
-  selectedMaskVertex: number
-  onMaskVertexSelect: (index: number) => void
-  onMaskChange: (id: string, mask: Point[]) => void
 }
 
-export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChange, editMode, selectedMaskVertex, onMaskVertexSelect, onMaskChange }: CalibrationCanvasProps) {
+export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChange }: CalibrationCanvasProps) {
   const { canvasRef, error } = useProjectionRenderer(state, getDrawable)
   const [dragging, setDragging] = useState<DragState | null>(null)
   const orderedSurfaces = useMemo(
@@ -43,19 +39,6 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
     if (isValidQuad(corners)) onCornersChange(surface.id, corners)
   }
 
-  const updateMaskFromPointer = (event: React.PointerEvent<SVGCircleElement>, surface: Surface, pointIndex: number) => {
-    const svg = event.currentTarget.ownerSVGElement
-    if (!svg || !surface.mask) return
-    const bounds = svg.getBoundingClientRect()
-    const point = clampPoint({
-      x: (event.clientX - bounds.left) / bounds.width,
-      y: (event.clientY - bounds.top) / bounds.height,
-    })
-    const mask = surface.mask.map((maskPoint) => ({ ...maskPoint }))
-    mask[pointIndex] = point
-    if (isValidPolygon(mask)) onMaskChange(surface.id, mask)
-  }
-
   const normalizedPointer = (event: React.PointerEvent<SVGElement>): Point | null => {
     const svg = event.currentTarget.ownerSVGElement
     if (!svg) return null
@@ -70,14 +53,12 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
     if (!dragging || dragging.kind !== 'surface') return
     const point = normalizedPointer(event)
     if (!point) return
-    const startPoints = dragging.mask ? [...dragging.corners, ...dragging.mask] : dragging.corners
-    const delta = clampTranslation(startPoints, {
+    const delta = clampTranslation(dragging.corners, {
       x: point.x - dragging.origin.x,
       y: point.y - dragging.origin.y,
     })
     const corners = translatePoints(dragging.corners, delta) as Surface['corners']
     onCornersChange(dragging.surfaceId, corners)
-    if (dragging.mask) onMaskChange(dragging.surfaceId, translatePoints(dragging.mask, delta))
   }
 
   return (
@@ -107,7 +88,6 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
                     kind: 'surface',
                     origin,
                     corners: surface.corners.map((corner) => ({ ...corner })) as Surface['corners'],
-                    mask: surface.mask?.map((point) => ({ ...point })) ?? null,
                   })
                 }}
                 onPointerMove={moveSurfaceFromPointer}
@@ -118,13 +98,7 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
                 onPointerCancel={() => setDragging(null)}
                 aria-label={`拖曳 ${surface.name}`}
               />
-              {surface.mask ? (
-                <polygon
-                  className="mask-outline"
-                  points={surface.mask.map((point) => `${point.x * VIEW_WIDTH},${point.y * VIEW_HEIGHT}`).join(' ')}
-                />
-              ) : null}
-              {selected && editMode === 'warp'
+              {selected
                 ? surface.corners.map((corner, cornerIndex) => (
                     <g key={cornerLabels[cornerIndex]}>
                       <circle
@@ -150,34 +124,6 @@ export function CalibrationCanvas({ state, getDrawable, onSelect, onCornersChang
                       <text x={corner.x * VIEW_WIDTH + 17} y={corner.y * VIEW_HEIGHT - 15}>
                         {cornerLabels[cornerIndex]}
                       </text>
-                    </g>
-                  ))
-                : null}
-              {selected && editMode === 'mask' && surface.mask
-                ? surface.mask.map((point, pointIndex) => (
-                    <g key={`mask-${pointIndex}`} className={pointIndex === selectedMaskVertex ? 'mask-handle active' : 'mask-handle'}>
-                      <circle
-                        cx={point.x * VIEW_WIDTH}
-                        cy={point.y * VIEW_HEIGHT}
-                        r="9"
-                        onPointerDown={(event) => {
-                          event.stopPropagation()
-                          event.currentTarget.setPointerCapture(event.pointerId)
-                          onMaskVertexSelect(pointIndex)
-                          setDragging({ surfaceId: surface.id, pointIndex, kind: 'mask' })
-                          updateMaskFromPointer(event, surface, pointIndex)
-                        }}
-                        onPointerMove={(event) => {
-                          if (dragging?.kind === 'mask' && dragging.surfaceId === surface.id && dragging.pointIndex === pointIndex) {
-                            updateMaskFromPointer(event, surface, pointIndex)
-                          }
-                        }}
-                        onPointerUp={(event) => {
-                          event.currentTarget.releasePointerCapture(event.pointerId)
-                          setDragging(null)
-                        }}
-                      />
-                      <text x={point.x * VIEW_WIDTH + 14} y={point.y * VIEW_HEIGHT - 12}>P{pointIndex + 1}</text>
                     </g>
                   ))
                 : null}

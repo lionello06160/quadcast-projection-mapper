@@ -1,5 +1,4 @@
-import type { ProjectState, SourceDescriptor, Surface } from './types'
-import { polygonBoundingBoxUvs } from './geometry'
+import type { Projector, ProjectState, SourceDescriptor, Surface } from './types'
 
 export const STORAGE_KEY = 'quadcast:project:v1'
 
@@ -10,11 +9,19 @@ export const TEST_SOURCE: SourceDescriptor = {
   status: 'ready',
 }
 
-export function makeSurface(index: number, sourceId: string | null = TEST_SOURCE.id): Surface {
+export function makeProjector(index: number): Projector {
+  return {
+    id: crypto.randomUUID(),
+    name: `投影機 ${String(index + 1).padStart(2, '0')}`,
+  }
+}
+
+export function makeSurface(index: number, projectorId: string, sourceId: string | null = TEST_SOURCE.id): Surface {
   const offset = Math.min(index * 0.025, 0.16)
   return {
     id: crypto.randomUUID(),
     name: `投影面 ${String(index + 1).padStart(2, '0')}`,
+    projectorId,
     sourceId,
     corners: [
       { x: 0.16 + offset, y: 0.18 + offset },
@@ -22,8 +29,6 @@ export function makeSurface(index: number, sourceId: string | null = TEST_SOURCE
       { x: 0.84 - offset, y: 0.82 - offset },
       { x: 0.16 + offset, y: 0.82 - offset },
     ],
-    mask: null,
-    maskUvs: null,
     opacity: 1,
     visible: true,
     zIndex: index,
@@ -31,13 +36,16 @@ export function makeSurface(index: number, sourceId: string | null = TEST_SOURCE
 }
 
 export function createDefaultState(): ProjectState {
-  const surface = makeSurface(0)
+  const projector = makeProjector(0)
+  const surface = makeSurface(0, projector.id)
   return {
     version: 1,
     outputBackground: '#000000',
+    projectors: [projector],
     surfaces: [surface],
     sources: [TEST_SOURCE],
     selectedSurfaceId: surface.id,
+    selectedProjectorId: projector.id,
     blackout: false,
     showGrid: true,
   }
@@ -59,20 +67,35 @@ export function normalizeState(candidate: unknown): ProjectState {
     }
   })
   if (!sources.some((source) => source.id === TEST_SOURCE.id)) sources.unshift(TEST_SOURCE)
+  const projectors = Array.isArray(value.projectors) && value.projectors.length
+    ? value.projectors
+    : [makeProjector(0)]
+  const selectedProjectorId = projectors.some((projector) => projector.id === value.selectedProjectorId)
+    ? value.selectedProjectorId!
+    : projectors[0].id
+  const surfaces = value.surfaces.map((surface) => {
+    const { mask: _mask, maskUvs: _maskUvs, ...cleanSurface } = surface as Surface & {
+      mask?: unknown
+      maskUvs?: unknown
+    }
+    return {
+      ...cleanSurface,
+      projectorId: projectors.some((projector) => projector.id === cleanSurface.projectorId)
+        ? cleanSurface.projectorId
+        : projectors[0].id,
+    }
+  })
+  const selectedProjectorSurfaces = surfaces.filter((surface) => surface.projectorId === selectedProjectorId)
   return {
     version: 1,
     outputBackground: typeof value.outputBackground === 'string' ? value.outputBackground : '#000000',
-    surfaces: value.surfaces.map((surface) => {
-      const mask = Array.isArray(surface.mask) ? surface.mask : null
-      const savedUvs = 'maskUvs' in surface && Array.isArray(surface.maskUvs) ? surface.maskUvs : null
-      let maskUvs = mask && savedUvs?.length === mask.length ? savedUvs : null
-      if (mask && !maskUvs) maskUvs = polygonBoundingBoxUvs(mask)
-      return { ...surface, mask, maskUvs }
-    }),
+    projectors,
+    surfaces,
     sources,
-    selectedSurfaceId: value.surfaces.some((surface) => surface.id === value.selectedSurfaceId)
+    selectedSurfaceId: selectedProjectorSurfaces.some((surface) => surface.id === value.selectedSurfaceId)
       ? value.selectedSurfaceId ?? null
-      : value.surfaces[0]?.id ?? null,
+      : selectedProjectorSurfaces[0]?.id ?? null,
+    selectedProjectorId,
     blackout: false,
     showGrid: value.showGrid ?? true,
   }
@@ -93,4 +116,16 @@ export function persistProject(state: ProjectState): void {
 
 export function sortSurfaces(surfaces: readonly Surface[]): Surface[] {
   return [...surfaces].sort((left, right) => left.zIndex - right.zIndex)
+}
+
+export function stateForProjector(state: ProjectState, projectorId: string): ProjectState {
+  const surfaces = state.surfaces.filter((surface) => surface.projectorId === projectorId)
+  return {
+    ...state,
+    surfaces,
+    selectedProjectorId: projectorId,
+    selectedSurfaceId: surfaces.some((surface) => surface.id === state.selectedSurfaceId)
+      ? state.selectedSurfaceId
+      : sortSurfaces(surfaces)[0]?.id ?? null,
+  }
 }

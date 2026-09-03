@@ -20,13 +20,17 @@ export interface SourceDescriptor {
   error?: string
 }
 
+export interface Projector {
+  id: string
+  name: string
+}
+
 export interface Surface {
   id: string
   name: string
+  projectorId: string
   sourceId: string | null
   corners: [Point, Point, Point, Point]
-  mask: Point[] | null
-  maskUvs: Point[] | null
   opacity: number
   visible: boolean
   zIndex: number
@@ -35,9 +39,11 @@ export interface Surface {
 export interface ProjectState {
   version: 1
   outputBackground: string
+  projectors: Projector[]
   surfaces: Surface[]
   sources: SourceDescriptor[]
   selectedSurfaceId: string | null
+  selectedProjectorId: string
   blackout: boolean
   showGrid: boolean
 }
@@ -48,9 +54,9 @@ export interface ProjectionBridge {
 }
 
 export type ProjectionMessage =
-  | { type: 'projection:state'; state: ProjectState }
-  | { type: 'projection:ready' }
-  | { type: 'projection:closed' }
+  | { type: 'projection:state'; state: ProjectState; projectorId: string }
+  | { type: 'projection:ready'; projectorId: string }
+  | { type: 'projection:closed'; projectorId: string }
 
 declare global {
   interface Window {

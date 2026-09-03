@@ -12,23 +12,22 @@ import {
   Grid3X3,
   ImagePlus,
   Maximize2,
-  Minus,
+  Monitor,
   MonitorUp,
   Pause,
   Play,
   Plus,
   Radio,
   ScreenShare,
-  Spline,
   Trash2,
   Volume2,
   VolumeX,
 } from 'lucide-react'
 import { CalibrationCanvas } from './CalibrationCanvas'
-import { insertPointOnEdge, isValidQuad, isValidPolygon, longestEdgeIndex, polygonBoundingBoxUvs } from './geometry'
-import { makeSurface, loadProject, normalizeState, persistProject, sortSurfaces, TEST_SOURCE } from './projectState'
+import { isValidQuad } from './geometry'
+import { makeProjector, makeSurface, loadProject, normalizeState, persistProject, sortSurfaces, stateForProjector, TEST_SOURCE } from './projectState'
 import { SourceManager } from './sourceManager'
-import type { ProjectionMessage, ProjectState, SourceDescriptor, Surface } from './types'
+import type { ProjectionMessage, ProjectState, Projector, SourceDescriptor, Surface } from './types'
 
 type Notice = { tone: 'info' | 'error'; message: string }
 
@@ -52,16 +51,19 @@ export function App() {
   const manager = managerRef.current
   const [state, setState] = useState<ProjectState>(loadProject)
   const [notice, setNotice] = useState<Notice | null>(null)
-  const [outputOpen, setOutputOpen] = useState(false)
-  const [editMode, setEditMode] = useState<'warp' | 'mask'>('warp')
-  const [selectedMaskVertex, setSelectedMaskVertex] = useState(0)
-  const outputWindowRef = useRef<Window | null>(null)
+  const [openProjectorIds, setOpenProjectorIds] = useState<string[]>([])
+  const outputWindowRefs = useRef(new Map<string, Window>())
   const stateRef = useRef(state)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
   const reconnectSourceIdRef = useRef<string | undefined>(undefined)
 
-  const selectedSurface = state.surfaces.find((surface) => surface.id === state.selectedSurfaceId) ?? null
+  const selectedProjector = state.projectors.find((projector) => projector.id === state.selectedProjectorId) ?? state.projectors[0]
+  const projectorSurfaces = useMemo(
+    () => state.surfaces.filter((surface) => surface.projectorId === selectedProjector?.id),
+    [selectedProjector?.id, state.surfaces],
+  )
+  const selectedSurface = projectorSurfaces.find((surface) => surface.id === state.selectedSurfaceId) ?? null
   const selectedSource = state.sources.find((source) => source.id === selectedSurface?.sourceId) ?? null
 
   const updateState = useCallback((updater: (current: ProjectState) => ProjectState) => {
@@ -71,10 +73,9 @@ export function App() {
   useEffect(() => {
     stateRef.current = state
     const timer = window.setTimeout(() => persistProject(state), 180)
-    const output = outputWindowRef.current
-    if (output && !output.closed) {
-      output.postMessage({ type: 'projection:state', state } satisfies ProjectionMessage, window.location.origin)
-    }
+    outputWindowRefs.current.forEach((output, projectorId) => {
+      if (!output.closed) output.postMessage({ type: 'projection:state', state, projectorId } satisfies ProjectionMessage, window.location.origin)
+    })
     return () => window.clearTimeout(timer)
   }, [state])
 
@@ -93,17 +94,27 @@ export function App() {
     const receive = (event: MessageEvent<ProjectionMessage>) => {
       if (event.origin !== window.location.origin) return
       if (event.data?.type === 'projection:ready') {
-        setOutputOpen(true)
-        outputWindowRef.current?.postMessage(
-          { type: 'projection:state', state: stateRef.current } satisfies ProjectionMessage,
+        setOpenProjectorIds((current) => current.includes(event.data.projectorId) ? current : [...current, event.data.projectorId])
+        outputWindowRefs.current.get(event.data.projectorId)?.postMessage(
+          { type: 'projection:state', state: stateRef.current, projectorId: event.data.projectorId } satisfies ProjectionMessage,
           window.location.origin,
         )
       }
-      if (event.data?.type === 'projection:closed') setOutputOpen(false)
+      if (event.data?.type === 'projection:closed') {
+        outputWindowRefs.current.delete(event.data.projectorId)
+        setOpenProjectorIds((current) => current.filter((id) => id !== event.data.projectorId))
+      }
     }
     window.addEventListener('message', receive)
     const interval = window.setInterval(() => {
-      if (outputWindowRef.current?.closed) setOutputOpen(false)
+      const closed: string[] = []
+      outputWindowRefs.current.forEach((output, projectorId) => {
+        if (output.closed) {
+          outputWindowRefs.current.delete(projectorId)
+          closed.push(projectorId)
+        }
+      })
+      if (closed.length) setOpenProjectorIds((current) => current.filter((id) => !closed.includes(id)))
     }, 1000)
     return () => {
       window.removeEventListener('message', receive)
@@ -182,23 +193,80 @@ export function App() {
   }
 
   const openOutput = () => {
-    if (outputWindowRef.current && !outputWindowRef.current.closed) {
-      outputWindowRef.current.focus()
+    if (!selectedProjector) return
+    const existing = outputWindowRefs.current.get(selectedProjector.id)
+    if (existing && !existing.closed) {
+      existing.focus()
       return
     }
-    const popup = window.open('/?view=output', 'quadcast-output', 'popup,width=1280,height=720')
+    const popup = window.open(
+      `/?view=output&projector=${encodeURIComponent(selectedProjector.id)}`,
+      `quadcast-output-${selectedProjector.id}`,
+      'popup,width=1280,height=720',
+    )
     if (!popup) {
       setNotice({ tone: 'error', message: '瀏覽器封鎖了輸出視窗，請允許此網站開啟彈出式視窗' })
       return
     }
-    outputWindowRef.current = popup
-    setOutputOpen(true)
+    outputWindowRefs.current.set(selectedProjector.id, popup)
+    setOpenProjectorIds((current) => current.includes(selectedProjector.id) ? current : [...current, selectedProjector.id])
     popup.focus()
   }
 
-  const addSurface = () => {
+  const selectProjector = (projectorId: string) => {
+    updateState((current) => ({
+      ...current,
+      selectedProjectorId: projectorId,
+      selectedSurfaceId: sortSurfaces(current.surfaces.filter((surface) => surface.projectorId === projectorId))[0]?.id ?? null,
+    }))
+  }
+
+  const addProjector = () => {
     updateState((current) => {
-      const surface = makeSurface(current.surfaces.length, current.sources[0]?.id ?? null)
+      const projector = makeProjector(current.projectors.length)
+      const surface = makeSurface(0, projector.id, current.sources[0]?.id ?? null)
+      return {
+        ...current,
+        projectors: [...current.projectors, projector],
+        surfaces: [...current.surfaces, surface],
+        selectedProjectorId: projector.id,
+        selectedSurfaceId: surface.id,
+      }
+    })
+  }
+
+  const updateProjector = (id: string, patch: Partial<Projector>) => {
+    updateState((current) => ({
+      ...current,
+      projectors: current.projectors.map((projector) => projector.id === id ? { ...projector, ...patch } : projector),
+    }))
+  }
+
+  const deleteProjector = (id: string) => {
+    if (state.projectors.length <= 1) return
+    outputWindowRefs.current.get(id)?.close()
+    outputWindowRefs.current.delete(id)
+    setOpenProjectorIds((open) => open.filter((projectorId) => projectorId !== id))
+    updateState((current) => {
+      if (current.projectors.length <= 1) return current
+      const projectors = current.projectors.filter((projector) => projector.id !== id)
+      const surfaces = current.surfaces.filter((surface) => surface.projectorId !== id)
+      const selectedProjectorId = projectors[0].id
+      return {
+        ...current,
+        projectors,
+        surfaces,
+        selectedProjectorId,
+        selectedSurfaceId: sortSurfaces(surfaces.filter((surface) => surface.projectorId === selectedProjectorId))[0]?.id ?? null,
+      }
+    })
+  }
+
+  const addSurface = () => {
+    if (!selectedProjector) return
+    updateState((current) => {
+      const count = current.surfaces.filter((surface) => surface.projectorId === selectedProjector.id).length
+      const surface = makeSurface(count, selectedProjector.id, current.sources[0]?.id ?? null)
       return { ...current, surfaces: [...current.surfaces, surface], selectedSurfaceId: surface.id }
     })
   }
@@ -220,9 +288,7 @@ export function App() {
       id: crypto.randomUUID(),
       name: `${surface.name} COPY`,
       corners: surface.corners.map((point) => ({ x: point.x + shiftX, y: point.y + shiftY })) as Surface['corners'],
-      mask: surface.mask?.map((point) => ({ x: point.x + shiftX, y: point.y + shiftY })) ?? null,
-      maskUvs: surface.maskUvs?.map((point) => ({ ...point })) ?? null,
-      zIndex: state.surfaces.length,
+      zIndex: projectorSurfaces.length,
     }
     updateState((current) => ({ ...current, surfaces: [...current.surfaces, copy], selectedSurfaceId: copy.id }))
   }
@@ -230,13 +296,17 @@ export function App() {
   const deleteSurface = (id: string) => {
     updateState((current) => {
       const surfaces = current.surfaces.filter((surface) => surface.id !== id)
-      return { ...current, surfaces, selectedSurfaceId: surfaces[0]?.id ?? null }
+      return {
+        ...current,
+        surfaces,
+        selectedSurfaceId: sortSurfaces(surfaces.filter((surface) => surface.projectorId === current.selectedProjectorId))[0]?.id ?? null,
+      }
     })
   }
 
   const moveSurface = (id: string, direction: -1 | 1) => {
     updateState((current) => {
-      const ordered = sortSurfaces(current.surfaces)
+      const ordered = sortSurfaces(current.surfaces.filter((surface) => surface.projectorId === current.selectedProjectorId))
       const index = ordered.findIndex((surface) => surface.id === id)
       const target = index + direction
       if (index < 0 || target < 0 || target >= ordered.length) return current
@@ -304,45 +374,19 @@ export function App() {
     if (isValidQuad(corners)) updateSurface(selectedSurface.id, { corners })
   }
 
-  const enableMask = () => {
-    if (!selectedSurface) return
-    updateSurface(selectedSurface.id, {
-      mask: selectedSurface.corners.map((point) => ({ ...point })),
-      maskUvs: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }],
-    })
-    setEditMode('mask')
-    setSelectedMaskVertex(0)
-  }
-
-  const addMaskPoint = () => {
-    if (!selectedSurface?.mask || selectedSurface.mask.length >= 32) return
-    const edgeIndex = longestEdgeIndex(selectedSurface.mask)
-    const mask = insertPointOnEdge(selectedSurface.mask, edgeIndex)
-    const currentUvs = selectedSurface.maskUvs?.length === selectedSurface.mask.length
-      ? selectedSurface.maskUvs
-      : polygonBoundingBoxUvs(selectedSurface.mask)
-    const maskUvs = insertPointOnEdge(currentUvs, edgeIndex)
-    updateSurface(selectedSurface.id, { mask, maskUvs })
-    setSelectedMaskVertex(edgeIndex + 1)
-  }
-
-  const removeMaskPoint = () => {
-    if (!selectedSurface?.mask || selectedSurface.mask.length <= 3) return
-    const mask = selectedSurface.mask.filter((_, index) => index !== selectedMaskVertex)
-    if (!isValidPolygon(mask)) return
-    const maskUvs = selectedSurface.maskUvs?.filter((_, index) => index !== selectedMaskVertex) ?? null
-    updateSurface(selectedSurface.id, { mask, maskUvs })
-    setSelectedMaskVertex(Math.max(0, Math.min(selectedMaskVertex, mask.length - 1)))
-  }
-
-  const surfaceCountLabel = useMemo(() => `${state.surfaces.length.toString().padStart(2, '0')} SURFACES`, [state.surfaces.length])
+  const surfaceCountLabel = `${projectorSurfaces.length.toString().padStart(2, '0')} SURFACES`
+  const outputOpen = selectedProjector ? openProjectorIds.includes(selectedProjector.id) : false
+  const previewState = useMemo(
+    () => selectedProjector ? stateForProjector(state, selectedProjector.id) : state,
+    [selectedProjector, state],
+  )
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-lockup">
           <Aperture size={26} strokeWidth={1.6} />
-          <div><strong>QUADCAST</strong><span>PROJECTION MAPPER / 01</span></div>
+          <div><strong>QUADCAST</strong><span>{selectedProjector?.name ?? 'PROJECTION MAPPER'}</span></div>
         </div>
         <div className="system-status"><Radio size={14} /><span>LOCAL ENGINE</span><b>WEBGL2</b></div>
         <div className="top-actions">
@@ -365,8 +409,31 @@ export function App() {
 
       <div className="workspace">
         <aside className="left-panel panel">
+          <section className="panel-section projectors-section">
+            <div className="section-heading"><span>01 / PROJECTORS</span><em>{state.projectors.length.toString().padStart(2, '0')}</em></div>
+            <button className="wide-add" onClick={addProjector}><Plus size={16} /> 新增投影機</button>
+            <div className="projector-list">
+              {state.projectors.map((projector, index) => {
+                const isOpen = openProjectorIds.includes(projector.id)
+                return (
+                  <article key={projector.id} className={projector.id === state.selectedProjectorId ? 'projector-item selected' : 'projector-item'}>
+                    <button className="projector-main" onClick={() => selectProjector(projector.id)}>
+                      <Monitor size={15} />
+                      <span><strong>{projector.name}</strong><small>{state.surfaces.filter((surface) => surface.projectorId === projector.id).length} 個投影面</small></span>
+                      <i className={isOpen ? 'projector-status online' : 'projector-status'} />
+                    </button>
+                    {state.projectors.length > 1 ? (
+                      <button className="icon-button remove-projector" aria-label={`刪除 ${projector.name}`} onClick={() => deleteProjector(projector.id)}><Trash2 size={13} /></button>
+                    ) : null}
+                    <b>{String(index + 1).padStart(2, '0')}</b>
+                  </article>
+                )
+              })}
+            </div>
+          </section>
+
           <section className="panel-section sources-section">
-            <div className="section-heading"><span>01 / SOURCES</span><em>{state.sources.length.toString().padStart(2, '0')}</em></div>
+            <div className="section-heading"><span>02 / SOURCES</span><em>{state.sources.length.toString().padStart(2, '0')}</em></div>
             <div className="source-add-grid">
               <button onClick={() => fileInputRef.current?.click()}><ImagePlus size={18} /><span>本機媒體</span></button>
               <button onClick={() => void capture()}><ScreenShare size={18} /><span>擷取畫面</span></button>
@@ -397,10 +464,10 @@ export function App() {
           </section>
 
           <section className="panel-section surfaces-section">
-            <div className="section-heading"><span>02 / SURFACES</span><em>{surfaceCountLabel}</em></div>
+            <div className="section-heading"><span>03 / SURFACES</span><em>{surfaceCountLabel}</em></div>
             <button className="wide-add" onClick={addSurface}><Plus size={16} /> 新增投影面</button>
             <div className="item-list surface-list">
-              {sortSurfaces(state.surfaces).map((surface, index) => (
+              {sortSurfaces(projectorSurfaces).map((surface, index) => (
                 <article key={surface.id} className={surface.id === state.selectedSurfaceId ? 'surface-item selected' : 'surface-item'}>
                   <button className="surface-index" onClick={() => updateState((current) => ({ ...current, selectedSurfaceId: surface.id }))}>
                     {String(index + 1).padStart(2, '0')}
@@ -421,18 +488,14 @@ export function App() {
         <section className="center-stage">
           <div className="stage-header">
             <div><span className="live-dot" /> OUTPUT PREVIEW</div>
-            <span>{editMode === 'warp' ? 'DRAG SURFACE OR CORNERS' : 'DRAG SURFACE OR EDIT MASK'}</span>
+            <span>DRAG SURFACE OR CORNERS</span>
           </div>
           <div className="stage-wrap">
             <CalibrationCanvas
-              state={state}
+              state={previewState}
               getDrawable={manager.getDrawable}
               onSelect={(id) => updateState((current) => ({ ...current, selectedSurfaceId: id }))}
               onCornersChange={(id, corners) => updateSurface(id, { corners })}
-              editMode={editMode}
-              selectedMaskVertex={selectedMaskVertex}
-              onMaskVertexSelect={setSelectedMaskVertex}
-              onMaskChange={(id, mask) => updateSurface(id, { mask })}
             />
           </div>
           <footer className="stage-footer">
@@ -443,10 +506,12 @@ export function App() {
         </section>
 
         <aside className="right-panel panel">
-          <div className="section-heading"><span>03 / INSPECTOR</span><em>{selectedSurface ? 'ACTIVE' : 'EMPTY'}</em></div>
+          <div className="section-heading"><span>04 / INSPECTOR</span><em>{selectedSurface ? 'ACTIVE' : 'EMPTY'}</em></div>
           {selectedSurface ? (
             <>
               <section className="inspector-block">
+                <label className="field-label" htmlFor="projector-name">投影機名稱</label>
+                <input id="projector-name" className="text-field" value={selectedProjector?.name ?? ''} onChange={(event) => selectedProjector && updateProjector(selectedProjector.id, { name: event.target.value })} />
                 <label className="field-label" htmlFor="surface-name">投影面名稱</label>
                 <input id="surface-name" className="text-field" value={selectedSurface.name} onChange={(event) => updateSurface(selectedSurface.id, { name: event.target.value })} />
                 <label className="field-label" htmlFor="source-select">影像來源</label>
@@ -457,18 +522,7 @@ export function App() {
               </section>
 
               <section className="inspector-block">
-                <div className="block-title"><span>EDIT GEOMETRY</span><small>{selectedSurface.mask ? `${selectedSurface.mask.length} POINTS` : 'QUAD'}</small></div>
-                <div className="mode-switch">
-                  <button className={editMode === 'warp' ? 'active' : ''} onClick={() => setEditMode('warp')}><Maximize2 size={14} /> 四角透視</button>
-                  <button className={editMode === 'mask' ? 'active' : ''} onClick={() => selectedSurface.mask ? setEditMode('mask') : enableMask()}><Spline size={14} /> 多邊形</button>
-                </div>
-                {editMode === 'mask' ? (
-                  <div className="mask-controls">
-                    <button onClick={addMaskPoint} disabled={!selectedSurface.mask || selectedSurface.mask.length >= 32}><Plus size={14} /> 增加節點</button>
-                    <button onClick={removeMaskPoint} disabled={!selectedSurface.mask || selectedSurface.mask.length <= 3}><Minus size={14} /> 刪除 P{selectedMaskVertex + 1}</button>
-                    <button className="reset-mask" onClick={() => { updateSurface(selectedSurface.id, { mask: null, maskUvs: null }); setEditMode('warp') }}>清除遮罩</button>
-                  </div>
-                ) : null}
+                <div className="block-title"><span>FOUR-CORNER WARP</span><small>HOMOGRAPHY</small></div>
               </section>
 
               <section className="inspector-block">

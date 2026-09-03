@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampTranslation, insertPointOnLongestEdge, invertMatrix3, isValidPolygon, isValidQuad, polygonArea, quadHomography, transformPoint, translatePoints, triangulatePolygon } from './geometry'
+import { clampTranslation, invertMatrix3, isValidQuad, polygonArea, quadHomography, transformPoint, translatePoints } from './geometry'
 import type { Surface } from './types'
 
 const rectangle: Surface['corners'] = [
@@ -18,27 +18,6 @@ describe('quadrilateral validation', () => {
   it('rejects crossed and degenerate corners', () => {
     expect(isValidQuad([rectangle[0], rectangle[2], rectangle[1], rectangle[3]])).toBe(false)
     expect(isValidQuad([{ x: 0, y: 0 }, { x: 0.1, y: 0 }, { x: 0.2, y: 0 }, { x: 0.3, y: 0 }])).toBe(false)
-  })
-})
-
-describe('arbitrary polygon masks', () => {
-  it('accepts concave outlines and rejects self intersections', () => {
-    expect(isValidPolygon([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.5, y: 0.4 }, { x: 1, y: 1 }, { x: 0, y: 1 }])).toBe(true)
-    expect(isValidPolygon([{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }])).toBe(false)
-  })
-
-  it('adds a midpoint without changing the outline', () => {
-    const result = insertPointOnLongestEdge(rectangle)
-    expect(result).toHaveLength(5)
-    expect(isValidPolygon(result)).toBe(true)
-    expect(triangulatePolygon(result)).toHaveLength(9)
-  })
-
-  it('triangulates convex and concave outlines without missing a region', () => {
-    expect(triangulatePolygon(rectangle)).toHaveLength(6)
-    expect(triangulatePolygon([
-      { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0.5, y: 0.4 }, { x: 1, y: 1 }, { x: 0, y: 1 },
-    ])).toHaveLength(9)
   })
 })
 

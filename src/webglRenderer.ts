@@ -1,46 +1,29 @@
-import { invertMatrix3, quadHomography, toGlMatrix3, triangulatePolygon } from './geometry'
+import { invertMatrix3, quadHomography, toGlMatrix3 } from './geometry'
 import { sortSurfaces } from './projectState'
 import type { ProjectState } from './types'
 
 const vertexShaderSource = `#version 300 es
 precision highp float;
-precision highp int;
 in vec2 a_position;
-in vec2 a_uv;
-uniform int u_meshMode;
 out vec2 v_screen;
-out vec2 v_uv;
 void main() {
-  if (u_meshMode == 1) {
-    gl_Position = vec4(a_position.x * 2.0 - 1.0, 1.0 - a_position.y * 2.0, 0.0, 1.0);
-    v_screen = a_position;
-    v_uv = a_uv;
-  } else {
-    gl_Position = vec4(a_position, 0.0, 1.0);
-    vec2 normalized = a_position * 0.5 + 0.5;
-    v_screen = vec2(normalized.x, 1.0 - normalized.y);
-    v_uv = vec2(0.0);
-  }
+  gl_Position = vec4(a_position, 0.0, 1.0);
+  vec2 normalized = a_position * 0.5 + 0.5;
+  v_screen = vec2(normalized.x, 1.0 - normalized.y);
 }`
 
 const fragmentShaderSource = `#version 300 es
 precision highp float;
-precision highp int;
 uniform sampler2D u_texture;
 uniform mat3 u_inverseHomography;
 uniform float u_opacity;
-uniform int u_meshMode;
 in vec2 v_screen;
-in vec2 v_uv;
 out vec4 outColor;
 void main() {
-  vec2 uv = v_uv;
-  if (u_meshMode == 0) {
-    vec3 projected = u_inverseHomography * vec3(v_screen, 1.0);
-    if (abs(projected.z) < 0.000001) discard;
-    uv = projected.xy / projected.z;
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
-  }
+  vec3 projected = u_inverseHomography * vec3(v_screen, 1.0);
+  if (abs(projected.z) < 0.000001) discard;
+  vec2 uv = projected.xy / projected.z;
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) discard;
   vec4 color = texture(u_texture, uv);
   outColor = vec4(color.rgb, color.a * u_opacity);
 }`
@@ -87,11 +70,8 @@ function isDrawableReady(source: TexImageSource): boolean {
 export class ProjectionRenderer {
   private gl: WebGL2RenderingContext
   private program: WebGLProgram
-  private screenPositionBuffer: WebGLBuffer
-  private meshPositionBuffer: WebGLBuffer
-  private meshUvBuffer: WebGLBuffer
+  private positionBuffer: WebGLBuffer
   private positionLocation: number
-  private uvLocation: number
   private textures = new Map<string, WebGLTexture>()
   private resizeObserver: ResizeObserver
   private animationFrame = 0
@@ -106,17 +86,14 @@ export class ProjectionRenderer {
     this.state = state
     this.getDrawable = getDrawable
 
-    const screenPositionBuffer = gl.createBuffer()
-    const meshPositionBuffer = gl.createBuffer()
-    const meshUvBuffer = gl.createBuffer()
-    if (!screenPositionBuffer || !meshPositionBuffer || !meshUvBuffer) throw new Error('無法建立 WebGL buffer')
-    this.screenPositionBuffer = screenPositionBuffer
-    this.meshPositionBuffer = meshPositionBuffer
-    this.meshUvBuffer = meshUvBuffer
-    gl.bindBuffer(gl.ARRAY_BUFFER, screenPositionBuffer)
+    const positionBuffer = gl.createBuffer()
+    if (!positionBuffer) throw new Error('無法建立 WebGL buffer')
+    this.positionBuffer = positionBuffer
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer)
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
     this.positionLocation = gl.getAttribLocation(this.program, 'a_position')
-    this.uvLocation = gl.getAttribLocation(this.program, 'a_uv')
+    gl.enableVertexAttribArray(this.positionLocation)
+    gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 0, 0)
 
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0)
     gl.enable(gl.BLEND)
@@ -155,13 +132,14 @@ export class ProjectionRenderer {
     if (!this.state.blackout) {
       const matrixLocation = gl.getUniformLocation(this.program, 'u_inverseHomography')
       const opacityLocation = gl.getUniformLocation(this.program, 'u_opacity')
-      const meshModeLocation = gl.getUniformLocation(this.program, 'u_meshMode')
       const uploaded = new Set<string>()
       for (const surface of sortSurfaces(this.state.surfaces)) {
         if (!surface.visible || !surface.sourceId) continue
         const source = this.getDrawable(surface.sourceId)
         if (!source || !isDrawableReady(source)) continue
         try {
+          const inverse = invertMatrix3(quadHomography(surface.corners))
+          gl.uniformMatrix3fv(matrixLocation, false, toGlMatrix3(inverse))
           gl.uniform1f(opacityLocation, surface.opacity)
           let texture = this.textures.get(surface.sourceId)
           if (!texture) {
@@ -180,33 +158,7 @@ export class ProjectionRenderer {
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
             uploaded.add(surface.sourceId)
           }
-          const maskUvs = surface.maskUvs
-          if (surface.mask && maskUvs?.length === surface.mask.length) {
-            const indices = triangulatePolygon(surface.mask)
-            if (!indices.length) continue
-            const positions = new Float32Array(indices.flatMap((index) => [surface.mask![index].x, surface.mask![index].y]))
-            const uvs = new Float32Array(indices.flatMap((index) => [maskUvs[index].x, maskUvs[index].y]))
-            gl.uniform1i(meshModeLocation, 1)
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.meshPositionBuffer)
-            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW)
-            gl.enableVertexAttribArray(this.positionLocation)
-            gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 0, 0)
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.meshUvBuffer)
-            gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.DYNAMIC_DRAW)
-            gl.enableVertexAttribArray(this.uvLocation)
-            gl.vertexAttribPointer(this.uvLocation, 2, gl.FLOAT, false, 0, 0)
-            gl.drawArrays(gl.TRIANGLES, 0, indices.length)
-          } else {
-            const inverse = invertMatrix3(quadHomography(surface.corners))
-            gl.uniform1i(meshModeLocation, 0)
-            gl.uniformMatrix3fv(matrixLocation, false, toGlMatrix3(inverse))
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.screenPositionBuffer)
-            gl.enableVertexAttribArray(this.positionLocation)
-            gl.vertexAttribPointer(this.positionLocation, 2, gl.FLOAT, false, 0, 0)
-            gl.disableVertexAttribArray(this.uvLocation)
-            gl.vertexAttrib2f(this.uvLocation, 0, 0)
-            gl.drawArrays(gl.TRIANGLES, 0, 3)
-          }
+          gl.drawArrays(gl.TRIANGLES, 0, 3)
         } catch {
           // Invalid or temporarily unavailable media is intentionally skipped.
         }
@@ -220,9 +172,7 @@ export class ProjectionRenderer {
     this.resizeObserver.disconnect()
     this.textures.forEach((texture) => this.gl.deleteTexture(texture))
     this.textures.clear()
-    this.gl.deleteBuffer(this.screenPositionBuffer)
-    this.gl.deleteBuffer(this.meshPositionBuffer)
-    this.gl.deleteBuffer(this.meshUvBuffer)
+    this.gl.deleteBuffer(this.positionBuffer)
     this.gl.deleteProgram(this.program)
   }
 }
